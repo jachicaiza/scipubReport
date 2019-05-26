@@ -1,0 +1,304 @@
+---
+title: 'Semantic Representation of the Scientific Production of Universities: An Extension Proposal to BiDo Ontology'
+author: "Mariela Tapia-Leon, Janneth Chicaiza and Oscar Corcho"
+date: "May 2019"
+output:
+  html_document:
+    highlight: default
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+    includes:
+      in_header: header.html
+  pdf_document:
+    highlight: zenburn
+    toc: yes
+  word_document: default
+link-citations: yes
+csl: apa.csl
+bibliography: scholar.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval=T, echo=T)
+```
+
+```{r load_libraries, include=FALSE}
+library(XML)
+library(SPARQL) # SPARQL querying package
+library(ggplot2)
+library(ggraph)
+library(igraph)
+library(tidyverse)
+library(RColorBrewer) 
+library(colormap)
+library(kableExtra)
+library(knitr)
+set.seed(1)
+```
+
+******
+# Introduction
+******
+## Description
+
+Some institutions measure the quality of a university according their scientific production. Currently, many universities register their scientific production in open access repositories. Also, scientific production is available in different scientific databases (Scopus, Web of Science). Connecting these data, with the application of ontologies, will potentially increase their value and help discover interesting relationships amongst them. This article explains what extent SPAR Ontology Network allowed to represent semantically the scientific production generated in a university and proposes an extension to cover the terms that SPAR Ontology did not have. For that, we worked with datasets obtained from Scopus about the contributions published by the University of Guayaquil and transformed it to RDF using the SPAR Ontology Network. We identified a small set of terms and relationships to add to BiDo Ontology (part of SPAR Ontology Network).  We created and validated our extension ontology propose using competency questions whose results were plotted through R language.
+
+## Background
+
+This technical report is based on the implementation of previous studies. The first one was named "Using the SPAR Ontology Network to represent the Scientific Production of a University: A Case Study" [@Tapia2019a] and the second one was named "Extension of the BiDO Ontology to Represent Scientific Production" [@Tapia2019b]. Besides, we have added a graphic representation using R language that allows transforms the SPARQL query results into statistics charts
+
+
+******
+# Functional requirements
+******
+
+## Competency and SPARQL Queries
+
+Part of the competency questions are based on the criteria “Scientific Production” of the “Model Generic of Evaluation of the Environment of Learning of Careers in Ecuador” by CACES  – Ecuador(CACES, 2017). The competency questions were:
+
+* Query 1: What kind of publications are there?
+
+$$
+# Query1:
+PREFIX bido: <http://purl.org/spar/bido-core/> 
+ PREFIX frbr: <http://purl.org/vocab/frbr/core/>
+PREFIX dcterms: <http://purl.org/dc/terms/> 
+SELECT DISTINCT ?root_name ?parent_name ?child_name 
+FROM <http://spar.linkeddata.es/graph/bido>
+#WHERE 
+{ 
+  ?paper frbr:partOf ?source . 
+  ?author foaf:name ?child_name ;
+  dcterms:creator ?paper .
+  ?source bido:holdsBibliometricDataInTime ?SMY .
+  ?SMY bido:withBibliometricData ?SYAD .
+  ?SYAD bido:relatesToSubjectCategory ?disc ;
+  bido:hasQuartile ?Q .
+  ?disc skos:prefLabel ?parent_name ;
+  skos:broader ?area .
+  ?area skos:prefLabel ?root_name .
+} ORDER BY ?root_name ?parent_name ?child_name"
+$$
+
+* Query 2: What is the distribution of citations by papers?
+
+$$
+# SPARQL Query:
+PREFIX bido: <http://purl.org/spar/bido-core/>
+PREFIX fabio: <http://purl.org/spar/fabio/>
+PREFIX frbr: <http://purl.org/vocab/frbr/core/>
+PREFIX spar: <http://purl.org/spar/bido/>
+SELECT DISTINCT ?numCites  (count(*) AS ?freq)
+FROM <http://spar.linkeddata.es/graph/bido>
+WHERE {  
+  ?paper ^frbr:realization [];  bido:holdsBibliometricDataInTime ?paperMeasure .
+  ?paperMeasure bido:withBibliometricData ?paperCitations .  
+  ?paperCitations bido:hasMeasure spar:paper-citation-count ; bido:hasNumericValue ?numCites2.
+  BIND(xsd:int(?numCites2) as ?numCites )
+} ORDER BY ASC(?numCites)
+$$
+
+* Query 3: How many publications have been published in journals indexed in Scopus?
+
+$$
+# SPARQL Query:
+PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+PREFIX fabio: <http://purl.org/spar/fabio/>
+PREFIX frbr: <http://purl.org/vocab/frbr/core/>
+SELECT ?journal (count(*) AS ?number)
+FROM <http://spar.linkeddata.es/graph/bido>
+WHERE {
+  [] ^frbr:partOf []; rdf:type fabio:Journal ; foaf:name ?name .   
+  BIND(UCASE(?name) AS ?journal)
+} GROUP BY ?journal
+ORDER BY DESC(?number) ASC(?journal)
+$$
+
+* Query 4: How many publications have been published in a specific area?
+
+$$
+# SPARQL Query:
+PREFIX bido: <http://purl.org/spar/bido-core/>
+PREFIX frbr: <http://purl.org/vocab/frbr/core/>
+PREFIX dcterms: <http://purl.org/dc/terms/>
+SELECT DISTINCT ?root_name ?parent_name ?child_name
+FROM <http://spar.linkeddata.es/graph/bido>
+WHERE{
+  VALUES ?area {<http://bido.linkeddata.es/ext/2100>}  
+  ?paper frbr:partOf ?source .  
+  ?author foaf:name ?child_name ;  dcterms:creator ?paper .  
+  ?source bido:holdsBibliometricDataInTime ?SMY .  
+  ?SMY bido:withBibliometricData ?SYAD .  
+  ?SYAD bido:relatesToSubjectCategory ?disc ;  bido:hasQuartile ?Q .  
+  ?disc skos:prefLabel ?parent_name ;  skos:broader ?area .  
+  ?area skos:prefLabel ?root_name .
+} ORDER BY ?root_name ?parent_name ?child_name
+$$
+
+
+
+## Configuration data:
+
+To execute previous queries in a engine, next information can be used.
+
+$SPARQL\ Endpoint:$ <http://spar.linkeddata.es/sparql>
+
+$Graph\ name:$ <http://spar.linkeddata.es/graph/bido>
+
+All queries are available in the csv file, queries.csv.
+
+
+
+******
+# Graphics  
+******
+
+
+```{r}
+endpoint <- "http://spar.linkeddata.es/sparql"
+
+# load queries
+queries <- read.csv("queries.csv" , header=F, sep=",")
+
+```
+## Query 1: What kind of publications are there?
+
+According to the document type available in Scopus for UG publications, three of the four papers are published in journals (see next Figure). On the other hand, the least amount of publications corresponds to the book chapters
+
+```{r message= FALSE, warning=FALSE}
+query1 <- as.character(queries$V2[1])
+qd1 <- SPARQL(endpoint, query1)
+df1 <- qd1$results
+
+df1 <- df1 %>%
+  arrange(desc(number)) %>%
+  mutate(prop = round(number*100/sum(number), 1),
+         lab.ypos = (cumsum(prop) - 0.5*prop))
+
+len <- NROW(df1)
+colors3 <- c("#999999", "#336666", "#aec7e8", "#CCCCCC", "#6699CC")
+
+#  scale_fill_brewer(palette="Blues")
+ggplot(df1, aes(x = "", y = prop, fill=pubType)) +
+  geom_bar(width = 1, size = 0.5, stat = "identity", color = "white") +
+  geom_text(aes(x=1.3, y=prop, label = paste0(round(prop,1), "%")), position = position_stack(vjust = 0.5), color = "black", size=3.4)+
+  labs(x = NULL, y = NULL, fill = NULL, 
+         title = "") +
+  coord_polar("y", start = 0)+
+  ggpubr::fill_palette(colors3)+
+  theme(legend.position="bottom", legend.box = "horizontal", panel.background=element_rect(fill = "#FFFFFF",
+                                colour = "#FFFFFF",
+                                size = 0.5, linetype = "solid")) +
+  labs(subtitle="Type of publications")
+ 
+```
+
+
+
+## Query 2: What is the distribution of citations by papers?
+```{r message= FALSE, warning=FALSE}
+
+query2 <- as.character(queries$V2[2])
+qd2 <- SPARQL(endpoint, query2)
+df2 <- qd2$results
+
+#Exploring outliers
+head(arrange(df2, df2$numCites), 5) # 279 papers have never been cited
+tail(arrange(df2, df2$numCites), 5) # some papers have at least 1 cite
+
+#Extracting a subset without outliers
+df2.subset <- subset(df2, numCites > 0 & numCites <=50)
+
+plot(df2.subset, type='o', pch=20, cex=df2.subset$freq/2^2, col="#aec7e8", ylim=c(0, 60), xlim=c(0, 50), xlab="Number of cites", ylab="Number of Journals")
+
+```
+
+By removing outliers, i.e. papers without any citation (279) and papers with more than 50 citations, the previous figure shows the distribution resulting. Note that the number of papers decreases as the number of citations increases.
+
+## Query 3: How many publications have been published in journals indexed in Scopus?
+
+
+```{r message= FALSE, warning=FALSE}
+query3 <- as.character(queries$V2[3])
+qd3 <- SPARQL(endpoint, query3)
+df3 <- qd3$results
+df3.subset <- subset(df3, number >=3)
+kable(df3.subset, caption="Jounals with more than 2 publications", format="markdown")
+summary(df3.subset)
+ggplot(df3.subset, aes(x=journal, y=number)) +
+  geom_bar(fill = "#999999", stat = "identity", width = 0.6) +
+  geom_text(aes(label = number), vjust = -0.3) +
+  ylim(0, 65)+ ylab("Papers")+
+  xlab("Journals")+
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, hjust=0.95,vjust=0.2, size=6))
+
+```
+
+As you can see, the "Espacios" journal is the source most chosen by UG researchers. Futhermore, there are other journals with 1 or 2 publications:
+
+```{r message= FALSE, warning=FALSE}
+print (sprintf("Journals with 1 papers is %i", NROW(subset(df3, number==1))))
+print (sprintf("Journals with 2 papers is %i", NROW(subset(df3, number==2))))
+
+```
+
+
+## Query 4: How many publications have been published in a specific area?
+
+Finally, we present a dendrogram of researchers grouped by topic. Each subtree shows people who have published in the same discipline. The color distinguishes the authors related to more than 1 topic. Graphics like the Figure 5 can be very useful to find pairs of researchers in the same area.
+
+```{r message= FALSE, warning=FALSE}
+
+query4 <- as.character(queries$V2[4])
+qd4 <- SPARQL(endpoint, query4)
+df4 <- qd4$results
+
+edgeL1 <- df4[, c("root_name", "parent_name")]
+#edgeL1 <- edgeL1[!duplicated(edgeL1),]
+edgeL2 <- df4[, c("parent_name", "child_name")]
+names(edgeL1) <- c("from", "to")
+names(edgeL2) <- c("from", "to")
+edgesQ4 <- rbind(edgeL1, edgeL2)
+nameQ4 <- unique(c(as.character(edgesQ4$from), as.character(edgesQ4$to)))
+len <- NROW(nameQ4)
+verticesQ4 = data.frame(
+  name = nameQ4 , 
+  value = runif(len)
+) 
+verticesQ4$group = edgesQ4$from[ match( verticesQ4$name, edgesQ4$to ) ]
+verticesQ4$id=NA
+leavesQ4=which(is.na( match(verticesQ4$name, edgesQ4$from) ))
+nleavesQ4=length(leavesQ4)
+verticesQ4$id[ leavesQ4 ] = seq(1:nleavesQ4)
+verticesQ4$angle= 90 - 360 * verticesQ4$id / nleavesQ4
+verticesQ4$hjust<-ifelse( verticesQ4$angle < -90, 1, 0)
+verticesQ4$angle<-ifelse(verticesQ4$angle < -90, verticesQ4$angle+180, verticesQ4$angle)
+graphQ4 <- graph_from_data_frame( edgesQ4, vertices=verticesQ4 )
+colorQ4 <- colormap(colormap = colormaps$viridis, nshades = 6, format = "hex", alpha = 1, reverse = FALSE)[sample(c(1:6), 10, replace=TRUE)]
+labels <- df4[, 2]
+labels <- labels[!duplicated(labels)]
+
+p4 <- ggraph(graphQ4, layout = 'dendrogram', circular = TRUE) + 
+  geom_edge_diagonal(colour="grey") +
+  scale_edge_colour_distiller(palette = "RdPu") +
+  geom_node_text(aes(x = x*1.15, y=y*1.15, filter = leaf, label=name, angle = 90, hjust=hjust, colour=group), size=2.7, alpha=1) +
+  geom_node_point(aes(filter = leaf, x = x*1.07, y=y*1.07, colour=group, size=value, alpha=0.2)) +
+  scale_colour_manual(values= colors3) +
+    scale_size_continuous( range = c(0.1,7) ) +
+  theme_void() +
+  theme(
+    legend.position="none",
+    plot.margin=unit(c(0,0,0,0),"cm")) +
+  expand_limits(x = c(-1.3, 1.3), y = c(-1.3, 1.3))
+print(p4)
+```
+
+Note: Previous graph has been created based-on code available in the site of [from data to viz](https://www.data-to-viz.com/graph/dendrogram.html).
+
+# References
