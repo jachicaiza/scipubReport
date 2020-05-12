@@ -1,7 +1,8 @@
 ---
-title: 'Semantic Representation of the Scientific Production of Universities: An Extension Proposal to BiDo Ontology'
-author: "Mariela Tapia-Leon, Janneth Chicaiza and Oscar Corcho"
-date: "May 2019"
+title: 'Construction and leverage scientific knowledge graphs by means of semantic technologies'
+mainfont: Times New Roman
+author: "Janneth Chicaiza, Mariela Tapia-Leon and Teresa Santamaria-Leon"
+date: "May 2020"
 output:
   html_document:
     highlight: default
@@ -18,6 +19,7 @@ output:
     highlight: zenburn
     toc: yes
   word_document: default
+font-family: Times New Roman
 link-citations: yes
 csl: apa.csl
 bibliography: scholar.bib
@@ -28,7 +30,7 @@ knitr::opts_chunk$set(eval=T, echo=T)
 ```
 
 ```{r load_libraries, include=FALSE}
-library(XML)
+#library(XML)
 library(SPARQL) # SPARQL querying package
 library(ggplot2)
 library(ggraph)
@@ -38,6 +40,12 @@ library(RColorBrewer)
 library(colormap)
 library(kableExtra)
 library(knitr)
+library(wordcloud2)
+library(quanteda)
+library(slam)
+library(tm)
+library(SemNetCleaner)
+library(textstem)
 set.seed(1)
 ```
 
@@ -59,30 +67,36 @@ This technical report is based on the implementation of previous studies. The fi
 
 ## Competency and SPARQL Queries
 
-Part of the competency questions are based on the criteria “Scientific Production” of the “Model Generic of Evaluation of the Environment of Learning of Careers in Ecuador” by CACES  – Ecuador(CACES, 2017). The competency questions were:
+Part of the competency questions are based on the criteria "Scientific Production" of the "Model Generic of Evaluation of the Environment of Learning of Careers in Ecuador" by CACES  – Ecuador(CACES, 2017). The competency questions implemented as SPARQL queries were:
 
-* Query 1: What kind of publications are there?
+* Query 1: What type of document is published by UG researchers and what is its impact according to the source where they publish?
 
 $$
-# Query1:
-PREFIX bido: <http://purl.org/spar/bido-core/> 
- PREFIX frbr: <http://purl.org/vocab/frbr/core/>
-PREFIX dcterms: <http://purl.org/dc/terms/> 
-SELECT DISTINCT ?root_name ?parent_name ?child_name 
+# SPARQL Query:
+PREFIX bido: <http://purl.org/spar/bido-core/>
+PREFIX frbr: <http://purl.org/vocab/frbr/core/>
+PREFIX spar: <http://purl.org/spar/bido/>
+SELECT DISTINCT ?pubType, SUM(IF(?rank <= 10, 1, 0)) AS ?rank10, 
+   SUM(IF(?rank > 10 && ?rank <= 50, 1, 0)) AS ?rank11_50,
+   SUM(IF(?rank > 50 && ?rank <= 100, 1, 0)) AS ?rank51_100,
+   SUM(IF(?rank > 100 && ?rank <= 500, 1, 0)) AS ?rank101_500,
+   SUM(IF(?rank > 500, 1, 0)) AS ?rankMore500
 FROM <http://spar.linkeddata.es/graph/bido>
-#WHERE 
-{ 
-  ?paper frbr:partOf ?source . 
-  ?author foaf:name ?child_name ;
-  dcterms:creator ?paper .
-  ?source bido:holdsBibliometricDataInTime ?SMY .
-  ?SMY bido:withBibliometricData ?SYAD .
-  ?SYAD bido:relatesToSubjectCategory ?disc ;
-  bido:hasQuartile ?Q .
-  ?disc skos:prefLabel ?parent_name ;
-  skos:broader ?area .
-  ?area skos:prefLabel ?root_name .
-} ORDER BY ?root_name ?parent_name ?child_name"
+WHERE{ ?paper a ?type ; frbr:partOf ?source. 
+   BIND(REPLACE(STR(?type), 'http://purl.org/spar/fabio/', '') AS ?pubType)
+   FILTER (?pubType != "Expression")
+   { SELECT ?paper, MIN(?rankA) as ?rank
+    WHERE {
+       ?paper a ?type ; frbr:partOf ?source.
+       ?source bido:holdsBibliometricDataInTime ?SMY.
+       ?SMY bido:withBibliometricData/bido:rankInQuartile ?r .
+       ?SMY bido:accordingTo [].
+       BIND(xsd:integer(?r) AS ?rankA)
+       BIND(REPLACE(STR(?type), 'http://purl.org/spar/fabio/', '') AS ?pubType)
+       FILTER (?pubType != "Expression")
+    } GROUP BY ?paper
+  }
+}
 $$
 
 * Query 2: What is the distribution of citations by papers?
@@ -103,23 +117,29 @@ WHERE {
 } ORDER BY ASC(?numCites)
 $$
 
-* Query 3: How many publications have been published in journals indexed in Scopus?
+* Query 3: What are the most popular publication sources and what is their impact factor quartile?
 
 $$
 # SPARQL Query:
 PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 PREFIX fabio: <http://purl.org/spar/fabio/>
 PREFIX frbr: <http://purl.org/vocab/frbr/core/>
-SELECT ?journal (count(*) AS ?number)
+PREFIX bido: <http://purl.org/spar/bido-core/>
+SELECT ?journal ?bQuartile (count(*) AS ?number)
 FROM <http://spar.linkeddata.es/graph/bido>
 WHERE {
-  [] ^frbr:partOf []; rdf:type fabio:Journal ; foaf:name ?name .   
-  BIND(UCASE(?name) AS ?journal)
-} GROUP BY ?journal
-ORDER BY DESC(?number) ASC(?journal)
+   ?source ^frbr:partOf []; rdf:type fabio:Journal ; foaf:name ?name .
+   BIND(replace(UCASE(?name), '\\.', '') AS ?journal)
+   { SELECT ?source min(?quartile) as ?bQuartile 
+     WHERE { 
+       ?source bido:holdsBibliometricDataInTime/bido:withBibliometricData/bido:hasQuartile ?q .   
+       BIND(REPLACE(STR(?q), 'http://purl.org/spar/bido/Q', '') AS ?quartile)
+     }
+    }
+} 
 $$
 
-* Query 4: How many publications have been published in a specific area?
+* Query 4: Who are the researchers working in the disciplines of a specific area and what is their production
 
 $$
 # SPARQL Query:
@@ -128,19 +148,30 @@ PREFIX frbr: <http://purl.org/vocab/frbr/core/>
 PREFIX dcterms: <http://purl.org/dc/terms/>
 SELECT DISTINCT ?root_name ?parent_name ?child_name
 FROM <http://spar.linkeddata.es/graph/bido>
-WHERE{
-  VALUES ?area {<http://bido.linkeddata.es/ext/2100>}  
-  ?paper frbr:partOf ?source .  
-  ?author foaf:name ?child_name ;  dcterms:creator ?paper .  
-  ?source bido:holdsBibliometricDataInTime ?SMY .  
-  ?SMY bido:withBibliometricData ?SYAD .  
-  ?SYAD bido:relatesToSubjectCategory ?disc ;  bido:hasQuartile ?Q .  
-  ?disc skos:prefLabel ?parent_name ;  skos:broader ?area .  
-  ?area skos:prefLabel ?root_name .
+WHERE{ VALUES ?area {<http://bido.linkeddata.es/ext/1200>}
+    ?paper frbr:partOf ?source .
+    ?author foaf:name ?child_name ;  dcterms:creator ?paper .
+    ?source bido:holdsBibliometricDataInTime ?SMY .
+    ?SMY bido:withBibliometricData ?SYAD .
+    ?SYAD bido:relatesToSubjectCategory ?disc ;  bido:hasQuartile ?Q .
+    ?disc skos:prefLabel ?parent_name ;  skos:broader ?area . 
+    ?area skos:prefLabel ?root_name .
 } ORDER BY ?root_name ?parent_name ?child_name
 $$
+* Query 5: What are the main interests of the UG researchers?
 
-
+$$
+# SPARQL Query:
+PREFIX bido: <http://purl.org/spar/bido-core/>
+PREFIX frbr: <http://purl.org/vocab/frbr/core/>
+PREFIX spar: <http://purl.org/spar/bido/>
+PREFIX dct: <http://purl.org/dc/terms/>
+SELECT DISTINCT ?title ?date WHERE{
+  ?paper a [] ; frbr:partOf [] .
+  ?biblio frbr:realization ?paper .
+  ?biblio dct:issued ?date ; dct:title ?title . 
+} ORDER BY ?title
+$$
 
 ## Configuration data:
 
@@ -153,7 +184,6 @@ $Graph\ name:$ <http://spar.linkeddata.es/graph/bido>
 All queries are available in the csv file, queries.csv.
 
 
-
 ******
 # Graphics  
 ******
@@ -162,7 +192,7 @@ All queries are available in the csv file, queries.csv.
 ```{r}
 endpoint <- "http://spar.linkeddata.es/sparql"
 
-# load queries
+# load templates of queries
 queries <- read.csv("queries.csv" , header=F, sep=",")
 
 ```
@@ -174,31 +204,44 @@ According to the document type available in Scopus for UG publications, three of
 query1 <- as.character(queries$V2[1])
 qd1 <- SPARQL(endpoint, query1)
 df1 <- qd1$results
+df11 <- df1[, c("pubType", "rank10")]
+names(df11) <- c("pubType", "freq")
+df11['group'] <- 'Rank <= 10'
+df12 <- df1[, c("pubType", "rank11_50")]
+names(df12) <- c("pubType", "freq")
+df12['group'] <- 'Rank 11-50'
+df13 <- df1[, c("pubType", "rank51_100")]
+names(df13) <- c("pubType", "freq")
+df13['group'] <- 'Rank 51-100'
+df14 <- df1[, c("pubType", "rank101_500")]
+names(df14) <- c("pubType", "freq")
+df14['group'] <- 'Rank 101-500'
+df15 <- df1[, c("pubType", "rankMore500")]
+names(df15) <- c("pubType", "freq")
+df15['group'] <- 'Rank > 500'
 
-df1 <- df1 %>%
-  arrange(desc(number)) %>%
-  mutate(prop = round(number*100/sum(number), 1),
+df1 <- rbind(df11, df12, df13, df14, df15)
+df1$pubType <- as.factor(df1$pubType) 
+df1$group <- as.factor(df1$group) 
+docType_tot = data.frame(aggregate(freq ~ pubType, df1, sum))
+docType_tot <- docType_tot %>%
+  mutate(prop = round(freq*100/sum(freq), 1),
          lab.ypos = (cumsum(prop) - 0.5*prop))
-
-len <- NROW(df1)
-colors3 <- c("#999999", "#336666", "#aec7e8", "#CCCCCC", "#6699CC")
-
-#  scale_fill_brewer(palette="Blues")
-ggplot(df1, aes(x = "", y = prop, fill=pubType)) +
-  geom_bar(width = 1, size = 0.5, stat = "identity", color = "white") +
-  geom_text(aes(x=1.3, y=prop, label = paste0(round(prop,1), "%")), position = position_stack(vjust = 0.5), color = "black", size=3.4)+
-  labs(x = NULL, y = NULL, fill = NULL, 
-         title = "") +
-  coord_polar("y", start = 0)+
-  ggpubr::fill_palette(colors3)+
-  theme(legend.position="bottom", legend.box = "horizontal", panel.background=element_rect(fill = "#FFFFFF",
-                                colour = "#FFFFFF",
-                                size = 0.5, linetype = "solid")) +
-  labs(subtitle="Type of publications")
- 
+docType_tot <- docType_tot[, c('pubType', 'prop')]
+df1 <- merge (df1, docType_tot, by = "pubType")
+df1$prop <- as.character(df1$prop)
+df1$pubType <- gsub(pattern = "\\s", replacement = "", x = paste(df1$pubType, ':', df1$prop, '%'))
+colors <- c("#17B890", "#808080", "#C0C0C0", "#26817C", "#97D2E6") #   scale_fill_brewer() 
+ggplot(data=df1, aes(x=pubType, y=freq)) +
+  geom_bar(aes(fill = group), stat="identity", position="fill") + #position_dodge(width=0.9))+
+  xlab("Document type") + ylab("Rank distribution") +
+  labs(fill = 'Journals\' Rank ')+
+  theme_classic() +
+  scale_fill_manual(values=colors) +
+  theme(text=element_text(family="Times New Roman", size=12)) +
+  theme(legend.position="top", legend.box = "horizontal") 
+  
 ```
-
-
 
 ## Query 2: What is the distribution of citations by papers?
 ```{r message= FALSE, warning=FALSE}
@@ -213,30 +256,35 @@ tail(arrange(df2, df2$numCites), 5) # some papers have at least 1 cite
 
 #Extracting a subset without outliers
 df2.subset <- subset(df2, numCites > 0 & numCites <=50)
-
-plot(df2.subset, type='o', pch=20, cex=df2.subset$freq/2^2, col="#aec7e8", ylim=c(0, 60), xlim=c(0, 50), xlab="Number of cites", ylab="Number of Journals")
+par(family = "Times New Roman")
+plot(df2.subset, type='o', bty="n", pch=20, cex=df2.subset$freq/2^2, col="#97D2E6", ylim=c(0, 55), xlim=c(0, 50), xlab="Number of cites", ylab="Number of Journals")
+#text(df2.subset[,'freq'])
 
 ```
 
 By removing outliers, i.e. papers without any citation (279) and papers with more than 50 citations, the previous figure shows the distribution resulting. Note that the number of papers decreases as the number of citations increases.
 
-## Query 3: How many publications have been published in journals indexed in Scopus?
-
+## Query 3: What are the most popular publication sources and what is their impact factor quartile?
 
 ```{r message= FALSE, warning=FALSE}
 query3 <- as.character(queries$V2[3])
 qd3 <- SPARQL(endpoint, query3)
 df3 <- qd3$results
-df3.subset <- subset(df3, number >=3)
+df3$bQuartile <- as.numeric(df3$bQuartile)
+df3$journal <- substr(df3$journal, 1, 25)
+# Filtering jounals with more than 3 publications
+df3.subset <- subset(df3, number >3)
 kable(df3.subset, caption="Jounals with more than 2 publications", format="markdown")
 summary(df3.subset)
-ggplot(df3.subset, aes(x=journal, y=number)) +
-  geom_bar(fill = "#999999", stat = "identity", width = 0.6) +
-  geom_text(aes(label = number), vjust = -0.3) +
+ggplot(data=df3.subset, aes(x=journal, y=number)) +
+  geom_text(aes(label = number), vjust = -0.5, family="Times New Roman") +
+  geom_bar(aes(fill = bQuartile), stat = "identity", width=0.6) + #width = 0.6) +
+  geom_text(colour = "white", vjust = 1.3, size = 3.3, aes(label = paste0("Q", bQuartile)), family="Times New Roman") +
   ylim(0, 65)+ ylab("Papers")+
   xlab("Journals")+
   theme_classic() +
-  theme(axis.text.x = element_text(angle = 90, hjust=0.95,vjust=0.2, size=6))
+  theme(legend.position="none", text=element_text(family="Times New Roman", size=12)) +
+  theme(axis.text.x = element_text(angle = 90, hjust=0.95,vjust=0.2, size=7.5))
 
 ```
 
@@ -248,19 +296,19 @@ print (sprintf("Journals with 2 papers is %i", NROW(subset(df3, number==2))))
 
 ```
 
+These results make us suspect that the impact factor quartile is not one of the dominant criteria that researchers values when choosing the source to publish their research.
 
-## Query 4: How many publications have been published in a specific area?
 
-Finally, we present a dendrogram of researchers grouped by topic. Each subtree shows people who have published in the same discipline. The color distinguishes the authors related to more than 1 topic. Graphics like the Figure 5 can be very useful to find pairs of researchers in the same area.
+## Query 4: Who are the researchers working in the disciplines of a specific area and what is their production?
+
+Here, we present a dendrogram of researchers grouped by topic. Each subtree shows people who have published in the same discipline. The color distinguishes the authors related to more than 1 topic. Graphics like this graphic can be very useful to find pairs of researchers in the same area.
 
 ```{r message= FALSE, warning=FALSE}
-
 query4 <- as.character(queries$V2[4])
 qd4 <- SPARQL(endpoint, query4)
 df4 <- qd4$results
 
 edgeL1 <- df4[, c("root_name", "parent_name")]
-#edgeL1 <- edgeL1[!duplicated(edgeL1),]
 edgeL2 <- df4[, c("parent_name", "child_name")]
 names(edgeL1) <- c("from", "to")
 names(edgeL2) <- c("from", "to")
@@ -280,25 +328,71 @@ verticesQ4$angle= 90 - 360 * verticesQ4$id / nleavesQ4
 verticesQ4$hjust<-ifelse( verticesQ4$angle < -90, 1, 0)
 verticesQ4$angle<-ifelse(verticesQ4$angle < -90, verticesQ4$angle+180, verticesQ4$angle)
 graphQ4 <- graph_from_data_frame( edgesQ4, vertices=verticesQ4 )
-colorQ4 <- colormap(colormap = colormaps$viridis, nshades = 6, format = "hex", alpha = 1, reverse = FALSE)[sample(c(1:6), 10, replace=TRUE)]
 labels <- df4[, 2]
 labels <- labels[!duplicated(labels)]
-
+colors4 <- c("#1768AC", "#06BEE1", "#03256C", "#26817C", "#17B890", "#cc6633") 
 p4 <- ggraph(graphQ4, layout = 'dendrogram', circular = TRUE) + 
   geom_edge_diagonal(colour="grey") +
-  scale_edge_colour_distiller(palette = "RdPu") +
-  geom_node_text(aes(x = x*1.15, y=y*1.15, filter = leaf, label=name, angle = 90, hjust=hjust, colour=group), size=2.7, alpha=1) +
+  geom_node_text(aes(x = x*1.15, y=y*1.15, filter = leaf, label=name, angle = 90, hjust=hjust, colour=group), size=2.7, alpha=1, family="Times New Roman") +
   geom_node_point(aes(filter = leaf, x = x*1.07, y=y*1.07, colour=group, size=value, alpha=0.2)) +
-  scale_colour_manual(values= colors3) +
-    scale_size_continuous( range = c(0.1,7) ) +
+  scale_colour_manual(values= colors4) +
   theme_void() +
-  theme(
-    legend.position="none",
+  theme(legend.position="left", text=element_text(family="Times New Roman", size=10),
     plot.margin=unit(c(0,0,0,0),"cm")) +
-  expand_limits(x = c(-1.3, 1.3), y = c(-1.3, 1.3))
+  expand_limits(x = c(-1.8, 1.8), y = c(-1.8, 1.8))
 print(p4)
 ```
 
 Note: Previous graph has been created based-on code available in the site of [from data to viz](https://www.data-to-viz.com/graph/dendrogram.html).
+
+## Query 5: What are the main interests of the UG researchers?
+
+In this question, we try to identify the main topics in which UG authors research. To achieve this goal, papers' title were processed and we created a word cloud. 
+
+
+```{r message= FALSE, wYesarning=FALSE}
+
+query5 <- as.character(queries$V2[5])
+qd5 <- SPARQL(endpoint, query5)
+df5 <- qd5$results
+
+# PREPROCESSING TEXT:
+# Change words to singular:
+pluw <- read.csv("pluralw.txt")
+wordsToS <- names(pluw)
+for (i in (1:length(wordsToS))){
+  df5 <- data.frame(lapply(df5, function(x) {
+                gsub(wordsToS[i], singularize(wordsToS[i]), x)}))
+}
+
+vectorDoc <- Corpus(VectorSource(df5$title))
+vectorDoc = lemmatize_words(vectorDoc)
+vectorDoc <- tm_map(vectorDoc, content_transformer(tolower)) 
+vectorDoc <- tm_map(vectorDoc, content_transformer(removePunctuation))
+vectorDoc <- tm_map(vectorDoc, content_transformer(removeNumbers)) 
+
+# Remove stopwords from corpus
+stopw <- read.csv("stopwords.txt")
+stopw <- names(stopw)
+stopwordsEN <- c(stopwords('english'))
+stopwordsES <- c(stopwords('spanish'))
+vectorDoc <- tm_map(vectorDoc, removeWords, stopwordsEN)
+vectorDoc <- tm_map(vectorDoc, removeWords, stopw)
+vectorDoc <- tm_map(vectorDoc, removeWords, stopwordsES)
+
+# Creating matrix
+myTdm <-  TermDocumentMatrix(vectorDoc) 
+myTdm2 <- removeSparseTerms(myTdm, 0.999) 
+myTdm3 <- rollup(myTdm2, 2, na.rm=TRUE, FUN = sum)
+
+# Calculate the frequency of words and sort it descendingly by frequency
+m2 <- as.matrix(myTdm3)
+wordFreq <- sort(rowSums(m2), decreasing=TRUE)
+
+# Visualization of word cloud
+data = data.frame(names(wordFreq), freq=wordFreq)
+wordcloud2(data[data$freq > 4 & data$freq < 80, ], color = '#1768AC') 
+
+```
 
 # References
